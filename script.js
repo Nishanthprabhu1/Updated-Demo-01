@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: Instant Download + Success Feedback */
+/* script.js - Jewels-Ai Atelier: Dynamic Filename Description + Instant Download */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -29,6 +29,9 @@ let isProcessingHand = false, isProcessingFace = false;
 let lastGestureTime = 0;
 const GESTURE_COOLDOWN = 800; 
 let previousHandX = null;     
+
+/* Tracking Variables */
+let currentAssetName = "Select a Design"; // Holds the filename of the current item
 
 /* Camera State */
 let currentCameraMode = 'user'; 
@@ -166,7 +169,7 @@ async function preloadCategory(type) {
     loadingStatus.style.display = 'none';
 }
 
-/* --- 4. INSTANT DOWNLOAD WITH FEEDBACK --- */
+/* --- 4. DOWNLOAD WITH FEEDBACK --- */
 
 function downloadSingleSnapshot() {
     if(!currentPreviewData.url) {
@@ -391,6 +394,11 @@ function navigateJewelry(dir) {
   else if (currentType === 'chains') necklaceImg = nextItem;
   else if (currentType === 'rings') ringImg = nextItem;
   else if (currentType === 'bangles') bangleImg = nextItem;
+
+  // Track item name (Filename)
+  if (JEWELRY_ASSETS[currentType] && JEWELRY_ASSETS[currentType][nextIdx]) {
+      currentAssetName = JEWELRY_ASSETS[currentType][nextIdx].name;
+  }
 }
 
 async function selectJewelryType(type) {
@@ -406,6 +414,11 @@ async function selectJewelryType(type) {
       const firstItem = PRELOADED_IMAGES[type][0];
       if (type === 'earrings') earringImg = firstItem; else if (type === 'chains') necklaceImg = firstItem;
       else if (type === 'rings') ringImg = firstItem; else if (type === 'bangles') bangleImg = firstItem;
+      
+      // Track item name
+      if (JEWELRY_ASSETS[type] && JEWELRY_ASSETS[type][0]) {
+          currentAssetName = JEWELRY_ASSETS[type][0].name;
+      }
   }
   const container = document.getElementById('jewelry-options'); container.innerHTML = ''; container.style.display = 'flex';
   if (!JEWELRY_ASSETS[type]) return;
@@ -419,6 +432,9 @@ async function selectJewelryType(type) {
         const fullImg = PRELOADED_IMAGES[type][i];
         if (type === 'earrings') earringImg = fullImg; else if (type === 'chains') necklaceImg = fullImg;
         else if (type === 'rings') ringImg = fullImg; else if (type === 'bangles') bangleImg = fullImg;
+        
+        // Track name
+        currentAssetName = file.name;
     };
     container.appendChild(btnImg);
   });
@@ -447,17 +463,22 @@ async function runAutoStep() {
     if (currentType === 'earrings') earringImg = targetImg; else if (currentType === 'chains') necklaceImg = targetImg;
     else if (currentType === 'rings') ringImg = targetImg; else if (currentType === 'bangles') bangleImg = targetImg;
     
+    // Track name
+    if (JEWELRY_ASSETS[currentType] && JEWELRY_ASSETS[currentType][autoTryIndex]) {
+        currentAssetName = JEWELRY_ASSETS[currentType][autoTryIndex].name;
+    }
+
     autoTryTimeout = setTimeout(() => { triggerFlash(); captureToGallery(); autoTryIndex++; runAutoStep(); }, 1500); 
 }
 
-/* --- CAPTURE & GALLERY WITH PREMIUM DESCRIPTION --- */
+/* --- CAPTURE & OVERLAY (USING FILENAME) --- */
 function captureToGallery() {
   const tempCanvas = document.createElement('canvas'); 
   tempCanvas.width = videoElement.videoWidth; 
   tempCanvas.height = videoElement.videoHeight;
   const tempCtx = tempCanvas.getContext('2d');
   
-  // 1. Draw Camera Feed (Mirrored or Normal)
+  // 1. Draw Camera Feed
   if (currentCameraMode === 'environment') {
       tempCtx.translate(0, 0); tempCtx.scale(1, 1); 
   } else {
@@ -468,17 +489,22 @@ function captureToGallery() {
   tempCtx.setTransform(1, 0, 0, 1, 0, 0); // Reset for overlays
   try { tempCtx.drawImage(canvasElement, 0, 0); } catch(e) {}
   
-  // 2. DEFINE THE TEXT
-  const productTitle = "Product Code: '25252'";
-  const productDesc = "This exquisite gold earring features a unique triangular drop design adorned with intricate filigree work and stylized peacock motifs. It highlights a central teardrop red stone (kemp or ruby) and is finished with a festive fringe of hanging gold balls and deep red beads. A perfect blend of classic temple artistry and elegance.";
+  // 2. PREPARE THE TEXT (FILENAME)
+  const productTitle = "Product Description";
+  // Clean up the filename: remove extensions and replace underscores with spaces
+  let cleanName = currentAssetName.replace(/\.(png|jpg|jpeg|webp)$/i, "").replace(/_/g, " ");
+  // Capitalize first letter (optional, looks better)
+  cleanName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+  
+  const productDesc = cleanName;
 
   // 3. SETTINGS & METRICS
-  const padding = tempCanvas.width * 0.04; // 4% padding
-  const titleSize = tempCanvas.width * 0.045; // Title Size
-  const descSize = tempCanvas.width * 0.025; // Desc Size
+  const padding = tempCanvas.width * 0.04; 
+  const titleSize = tempCanvas.width * 0.045; 
+  const descSize = tempCanvas.width * 0.035; // Slightly larger for clarity
   const lineHeight = descSize * 1.4;
   
-  // Calculate Wrapped Description Lines
+  // Wrapped Text Logic
   tempCtx.font = `${descSize}px Montserrat, sans-serif`;
   const maxWidth = tempCanvas.width - (padding * 2);
   const words = productDesc.split(' ');
@@ -497,21 +523,20 @@ function captureToGallery() {
   lines.push(currentLine);
 
   // 4. CALCULATE BOX HEIGHT
-  // Title Height + Spacer + (Lines * LineHeight) + Bottom Padding
   const contentHeight = (titleSize * 1.5) + (titleSize * 0.5) + (lines.length * lineHeight) + padding;
   
   // 5. DRAW GRADIENT BACKGROUND
   const gradient = tempCtx.createLinearGradient(0, tempCanvas.height - contentHeight - padding, 0, tempCanvas.height);
-  gradient.addColorStop(0, "rgba(0,0,0,0)");      // Transparent top
-  gradient.addColorStop(0.2, "rgba(0,0,0,0.8)");  // Dark start
-  gradient.addColorStop(1, "rgba(0,0,0,0.95)");   // Solid bottom
+  gradient.addColorStop(0, "rgba(0,0,0,0)");      
+  gradient.addColorStop(0.2, "rgba(0,0,0,0.8)");  
+  gradient.addColorStop(1, "rgba(0,0,0,0.95)");   
   
   tempCtx.fillStyle = gradient;
   tempCtx.fillRect(0, tempCanvas.height - contentHeight - padding, tempCanvas.width, contentHeight + padding);
 
   // 6. DRAW TITLE (GOLD)
   tempCtx.font = `bold ${titleSize}px Playfair Display, serif`;
-  tempCtx.fillStyle = "#d4af37"; // Gold Color
+  tempCtx.fillStyle = "#d4af37"; 
   tempCtx.textAlign = "left";
   tempCtx.textBaseline = "top";
   const titleY = tempCanvas.height - contentHeight;
@@ -519,14 +544,14 @@ function captureToGallery() {
 
   // 7. DRAW DESCRIPTION (WHITE)
   tempCtx.font = `${descSize}px Montserrat, sans-serif`;
-  tempCtx.fillStyle = "#ffffff"; // White Color
-  const descStartY = titleY + (titleSize * 1.5); // Start below title
+  tempCtx.fillStyle = "#ffffff"; 
+  const descStartY = titleY + (titleSize * 1.5); 
   
   lines.forEach((line, index) => {
       tempCtx.fillText(line, padding, descStartY + (index * lineHeight));
   });
 
-  // 8. DRAW WATERMARK (Top Right)
+  // 8. DRAW WATERMARK
   if (watermarkImg.complete) {
       const wWidth = tempCanvas.width * 0.25; 
       const wHeight = (watermarkImg.height / watermarkImg.width) * wWidth;
@@ -535,7 +560,7 @@ function captureToGallery() {
   
   // Save & Return
   const dataUrl = tempCanvas.toDataURL('image/png');
-  const safeName = "Product_25252_Look";
+  const safeName = "Jewels_Look";
   autoSnapshots.push({ url: dataUrl, name: `${safeName}_${Date.now()}.png` });
   return { url: dataUrl, name: `${safeName}_${Date.now()}.png` }; 
 }
