@@ -1,10 +1,7 @@
-/* script.js - Jewels-Ai: Direct Download + Drive Sync (Updated URL) */
+/* script.js - Jewels-Ai Atelier: Instant Download (No WhatsApp/Sheets) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
-
-// [UPDATED] Your New Web App URL
-const UPLOAD_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwZOFpJ3vtdaWBw4WIkoq80UsGTh85yGPEOWrzYyUG1e6wbm7cjjTbk6JzqvOMSDdT5Vg/exec";
 
 const DRIVE_FOLDERS = {
   earrings: "1ySHR6Id5RxVj16-lf7NMN9I61RPySY9s",
@@ -33,17 +30,18 @@ let lastGestureTime = 0;
 const GESTURE_COOLDOWN = 800; 
 let previousHandX = null;     
 
-/* Tracking Variables */
-const sessionStartTime = Date.now(); 
-let currentAssetName = "Default Design"; 
-
 /* Camera State */
 let currentCameraMode = 'user'; 
 
 /* Gallery State */
 let currentLightboxIndex = 0;
-let autoSnapshots = [];
-let currentPreviewData = { url: null, name: 'Jewels-Ai_look.png' }; 
+
+/* Voice State */
+let recognition = null;
+let voiceEnabled = true;
+
+/* Physics State */
+let physics = { earringVelocity: 0, earringAngle: 0 };
 
 /* Stabilizer Variables */
 const SMOOTH_FACTOR = 0.8; 
@@ -53,7 +51,12 @@ let handSmoother = {
     bangle: { x: 0, y: 0, angle: 0, size: 0 }
 };
 
-let physics = { earringVelocity: 0, earringAngle: 0 };
+/* Auto-Try & Gallery */
+let autoTryRunning = false;
+let autoSnapshots = [];
+let autoTryIndex = 0;
+let autoTryTimeout = null;
+let currentPreviewData = { url: null, name: 'Jewels-Ai_look.png' }; 
 
 /* --- HELPER: LERP --- */
 function lerp(start, end, amt) {
@@ -69,7 +72,51 @@ function triggerFlash() {
     setTimeout(() => { flashOverlay.classList.remove('flash-active'); }, 300);
 }
 
-/* --- 2. GOOGLE DRIVE ASSET FETCHING --- */
+/* --- 2. VOICE RECOGNITION AI --- */
+function initVoiceControl() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+        recognition = new SpeechRecognition(); 
+        recognition.continuous = true; 
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+        recognition.onresult = (event) => {
+            const command = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+            processVoiceCommand(command);
+        };
+        recognition.onend = () => {
+            if (voiceEnabled) { setTimeout(() => { try { recognition.start(); } catch(e) { } }, 1000); }
+        };
+        try { recognition.start(); } catch(e) { console.log("Voice start error", e); }
+    } else {
+        const btn = document.getElementById('voice-btn');
+        if(btn) btn.style.display = 'none';
+    }
+}
+
+function toggleVoiceControl() {
+    const btn = document.getElementById('voice-btn');
+    if(!recognition) return;
+    if (voiceEnabled) {
+        voiceEnabled = false; recognition.stop();
+        btn.innerHTML = '🎙️'; btn.classList.add('voice-off');
+    } else {
+        voiceEnabled = true; try { recognition.start(); } catch(e) {}
+        btn.innerHTML = '🎙️'; btn.classList.remove('voice-off');
+    }
+}
+
+function processVoiceCommand(cmd) {
+    if (cmd.includes('next') || cmd.includes('change')) navigateJewelry(1);
+    else if (cmd.includes('back') || cmd.includes('previous')) navigateJewelry(-1);
+    else if (cmd.includes('photo') || cmd.includes('capture')) takeSnapshot();
+    else if (cmd.includes('earring')) selectJewelryType('earrings');
+    else if (cmd.includes('chain')) selectJewelryType('chains');
+    else if (cmd.includes('ring')) selectJewelryType('rings');
+    else if (cmd.includes('bangle')) selectJewelryType('bangles');
+}
+
+/* --- 3. GOOGLE DRIVE FETCHING --- */
 async function fetchFromDrive(category) {
     if (JEWELRY_ASSETS[category]) return;
     const folderId = DRIVE_FOLDERS[category];
@@ -98,7 +145,10 @@ async function fetchFromDrive(category) {
 
 async function preloadCategory(type) {
     await fetchFromDrive(type);
-    if (!JEWELRY_ASSETS[type]) { loadingStatus.style.display = 'none'; return; }
+    if (!JEWELRY_ASSETS[type]) {
+        loadingStatus.style.display = 'none';
+        return;
+    }
     if (!PRELOADED_IMAGES[type]) {
         PRELOADED_IMAGES[type] = [];
         const promises = JEWELRY_ASSETS[type].map(file => {
@@ -108,89 +158,51 @@ async function preloadCategory(type) {
                 img.src = file.src; PRELOADED_IMAGES[type].push(img);
             });
         });
-        if(videoElement.paused) loadingStatus.textContent = "Downloading Assets...";
+        if(videoElement.paused) {
+             loadingStatus.textContent = "Downloading Assets...";
+        }
         await Promise.all(promises); 
     }
     loadingStatus.style.display = 'none';
 }
 
-/* --- 3. DOWNLOAD & DATA CAPTURE LOGIC (NO WHATSAPP) --- */
+/* --- 4. INSTANT DOWNLOAD (NO WHATSAPP/SHEETS) --- */
 
-// A. Open the Modal (Asking for Phone)
-function requestDownload() {
-    // Show the modal to ask for phone number
-    const modal = document.getElementById('whatsapp-modal'); // Reusing existing modal ID
-    if(modal) {
-        modal.style.display = 'flex';
-        // Change button text to "Download"
-        const btn = modal.querySelector('button');
-        if(btn) btn.innerText = "Download Now";
+function downloadSingleSnapshot() {
+    if(!currentPreviewData.url) {
+        alert("No image to download.");
+        return;
     }
-}
-
-// B. Close Modal
-function closeWhatsAppModal() { 
-    document.getElementById('whatsapp-modal').style.display = 'none'; 
-}
-
-// C. The Action: Download + Save to Sheet
-function confirmDownload() {
-    const phoneInput = document.getElementById('user-phone');
-    const phone = phoneInput.value.trim();
-    
-    if (phone.length < 5) { 
-        alert("Please enter a valid phone number to download."); 
-        return; 
-    }
-
-    // 1. Close Modal
-    document.getElementById('whatsapp-modal').style.display = 'none';
-    
-    // 2. Show Processing Overlay
-    const overlay = document.getElementById('process-overlay');
-    if(overlay) {
-        overlay.style.display = 'flex'; 
-        document.getElementById('process-text').innerText = "Downloading...";
-    }
-
-    // 3. Trigger Download to Device (Browser Download)
+    // Directly save the file to device
     saveAs(currentPreviewData.url, currentPreviewData.name);
-
-    // 4. Send Data to Google Sheet (Background)
-    uploadToDriveAndSheet(phone);
-
-    // 5. Hide Overlay after delay
-    setTimeout(() => { 
-        if(overlay) overlay.style.display = 'none'; 
-    }, 2000);
 }
 
-// D. Upload Function
-function uploadToDriveAndSheet(phone) {
-    const sessionDuration = Math.round((Date.now() - sessionStartTime) / 1000); 
+function downloadAllAsZip() {
+    if (autoSnapshots.length === 0) {
+        alert("No images to download!");
+        return;
+    }
+    
+    const zip = new JSZip(); 
+    const folder = zip.folder("Jewels-Ai_Collection");
+    
+    autoSnapshots.forEach(item => {
+        folder.file(item.name, item.url.replace(/^data:image\/(png|jpg);base64,/, ""), {base64:true});
+    });
 
-    const payload = {
-        phone: phone,
-        image: currentPreviewData.url, // Sending full base64
-        filename: currentPreviewData.name,
-        duration: sessionDuration,
-        photosCount: autoSnapshots.length,
-        itemsViewed: currentAssetName,
-        category: currentType
-    };
-
-    // Send to Google Script
-    fetch(UPLOAD_SCRIPT_URL, {
-        method: 'POST', 
-        mode: 'no-cors', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-    })
-    .then(() => console.log("Upload success"))
-    .catch(err => console.error("Upload failed", err));
+    zip.generateAsync({type:"blob"})
+       .then(content => saveAs(content, "Jewels-Ai_Collection.zip"));
 }
 
-/* --- 4. PHYSICS & AI CORE --- */
+async function shareSingleSnapshot() {
+    if(!currentPreviewData.url) return;
+    const blob = await (await fetch(currentPreviewData.url)).blob();
+    const file = new File([blob], "look.png", { type: "image/png" });
+    if (navigator.share) navigator.share({ files: [file] }).catch(console.warn);
+    else alert("Share not supported.");
+}
+
+/* --- 5. PHYSICS & AI CORE --- */
 function calculateAngle(p1, p2) { return Math.atan2(p2.y - p1.y, p2.x - p1.x); }
 
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
@@ -209,6 +221,7 @@ hands.onResults((results) => {
 
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const lm = results.multiHandLandmarks[0];
+      
       const mcp = { x: lm[13].x * w, y: lm[13].y * h }; 
       const pip = { x: lm[14].x * w, y: lm[14].y * h };
       const targetRingAngle = calculateAngle(mcp, pip) - (Math.PI / 2);
@@ -238,16 +251,19 @@ hands.onResults((results) => {
           handSmoother.bangle.size = lerp(handSmoother.bangle.size, targetBangleWidth, SMOOTH_FACTOR);
       }
 
+      // --- DRAW RING ---
       if (ringImg && ringImg.complete) {
           const rHeight = (ringImg.height / ringImg.width) * handSmoother.ring.size;
           canvasCtx.save(); 
           canvasCtx.translate(handSmoother.ring.x, handSmoother.ring.y); 
           canvasCtx.rotate(handSmoother.ring.angle); 
           const currentDist = handSmoother.ring.size / 0.6;
-          canvasCtx.drawImage(ringImg, -handSmoother.ring.size/2, currentDist * 0.15, handSmoother.ring.size, rHeight); 
+          const yOffset = currentDist * 0.15;
+          canvasCtx.drawImage(ringImg, -handSmoother.ring.size/2, yOffset, handSmoother.ring.size, rHeight); 
           canvasCtx.restore();
       }
 
+      // --- DRAW BANGLE ---
       if (bangleImg && bangleImg.complete) {
           const bHeight = (bangleImg.height / bangleImg.width) * handSmoother.bangle.size;
           canvasCtx.save(); 
@@ -256,18 +272,21 @@ hands.onResults((results) => {
           canvasCtx.drawImage(bangleImg, -handSmoother.bangle.size/2, -bHeight/2, handSmoother.bangle.size, bHeight); 
           canvasCtx.restore();
       }
-      
-      const now = Date.now();
-      if (now - lastGestureTime > GESTURE_COOLDOWN) {
-          const indexTip = lm[8]; 
-          if (previousHandX !== null) {
-              const diff = indexTip.x - previousHandX;
-              if (Math.abs(diff) > 0.04) { navigateJewelry(diff < 0 ? 1 : -1); lastGestureTime = now; previousHandX = null; }
+
+      if (!autoTryRunning) {
+          const now = Date.now();
+          if (now - lastGestureTime > GESTURE_COOLDOWN) {
+              const indexTip = lm[8]; 
+              if (previousHandX !== null) {
+                  const diff = indexTip.x - previousHandX;
+                  if (Math.abs(diff) > 0.04) { navigateJewelry(diff < 0 ? 1 : -1); lastGestureTime = now; previousHandX = null; }
+              }
+              if (now - lastGestureTime > 100) previousHandX = indexTip.x;
           }
-          if (now - lastGestureTime > 100) previousHandX = indexTip.x;
       }
   } else { 
-      previousHandX = null; handSmoother.active = false; 
+      previousHandX = null; 
+      handSmoother.active = false; 
   }
   canvasCtx.restore();
 });
@@ -278,6 +297,7 @@ faceMesh.onResults((results) => {
   isProcessingFace = false; if(loadingStatus.style.display !== 'none') loadingStatus.style.display = 'none';
   canvasElement.width = videoElement.videoWidth; canvasElement.height = videoElement.videoHeight;
   canvasCtx.save(); canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  
   canvasCtx.translate(canvasElement.width, 0); canvasCtx.scale(-1, 1);
 
   if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
@@ -296,47 +316,53 @@ faceMesh.onResults((results) => {
       const distToRight = Math.hypot(nose.x - rightEar.x, nose.y - rightEar.y);
       const ratio = distToLeft / (distToLeft + distToRight);
       const xShift = ew * 0.05; 
+
       if (ratio > 0.2) { 
-          canvasCtx.save(); canvasCtx.translate(leftEar.x, leftEar.y); canvasCtx.rotate(physics.earringAngle); 
-          canvasCtx.drawImage(earringImg, (-ew/2) - xShift, -eh * 0.20, ew, eh); canvasCtx.restore(); 
+          canvasCtx.save(); 
+          canvasCtx.translate(leftEar.x, leftEar.y); 
+          canvasCtx.rotate(physics.earringAngle); 
+          canvasCtx.drawImage(earringImg, (-ew/2) - xShift, -eh * 0.20, ew, eh); 
+          canvasCtx.restore(); 
       }
+
       if (ratio < 0.8) { 
-          canvasCtx.save(); canvasCtx.translate(rightEar.x, rightEar.y); canvasCtx.rotate(physics.earringAngle); 
-          canvasCtx.drawImage(earringImg, (-ew/2) + xShift, -eh * 0.20, ew, eh); canvasCtx.restore(); 
+          canvasCtx.save(); 
+          canvasCtx.translate(rightEar.x, rightEar.y); 
+          canvasCtx.rotate(physics.earringAngle); 
+          canvasCtx.drawImage(earringImg, (-ew/2) + xShift, -eh * 0.20, ew, eh); 
+          canvasCtx.restore(); 
       }
     }
+
     if (necklaceImg && necklaceImg.complete) {
       let nw = earDist * 0.85; let nh = (necklaceImg.height/necklaceImg.width) * nw;
-      canvasCtx.drawImage(necklaceImg, neck.x - nw/2, neck.y + (earDist*0.1), nw, nh);
+      const neckY = neck.y + (earDist*0.1);
+      canvasCtx.drawImage(necklaceImg, neck.x - nw/2, neckY, nw, nh);
     }
   }
   canvasCtx.restore();
 });
 
-/* --- INITIALIZATION --- */
+/* --- UPDATED: SAFE INITIALIZATION --- */
 window.onload = async () => {
     await startCameraFast('user');
     setTimeout(() => { loadingStatus.style.display = 'none'; }, 5000);
     selectJewelryType('earrings');
 };
 
-/* --- UI HELPERS --- */
+/* --- UI HELPERS & TRACKING --- */
 function navigateJewelry(dir) {
   if (!currentType || !PRELOADED_IMAGES[currentType]) return;
   const list = PRELOADED_IMAGES[currentType];
   let currentImg = (currentType === 'earrings') ? earringImg : (currentType === 'chains') ? necklaceImg : (currentType === 'rings') ? ringImg : bangleImg;
   let idx = list.indexOf(currentImg); if (idx === -1) idx = 0; 
   let nextIdx = (idx + dir + list.length) % list.length;
-  const nextItem = list[nextIdx];
   
+  const nextItem = list[nextIdx];
   if (currentType === 'earrings') earringImg = nextItem;
   else if (currentType === 'chains') necklaceImg = nextItem;
   else if (currentType === 'rings') ringImg = nextItem;
   else if (currentType === 'bangles') bangleImg = nextItem;
-
-  if (JEWELRY_ASSETS[currentType] && JEWELRY_ASSETS[currentType][nextIdx]) {
-      currentAssetName = JEWELRY_ASSETS[currentType][nextIdx].name;
-  }
 }
 
 async function selectJewelryType(type) {
@@ -352,7 +378,6 @@ async function selectJewelryType(type) {
       const firstItem = PRELOADED_IMAGES[type][0];
       if (type === 'earrings') earringImg = firstItem; else if (type === 'chains') necklaceImg = firstItem;
       else if (type === 'rings') ringImg = firstItem; else if (type === 'bangles') bangleImg = firstItem;
-      if(JEWELRY_ASSETS[type] && JEWELRY_ASSETS[type][0]) currentAssetName = JEWELRY_ASSETS[type][0].name;
   }
   const container = document.getElementById('jewelry-options'); container.innerHTML = ''; container.style.display = 'flex';
   if (!JEWELRY_ASSETS[type]) return;
@@ -366,19 +391,45 @@ async function selectJewelryType(type) {
         const fullImg = PRELOADED_IMAGES[type][i];
         if (type === 'earrings') earringImg = fullImg; else if (type === 'chains') necklaceImg = fullImg;
         else if (type === 'rings') ringImg = fullImg; else if (type === 'bangles') bangleImg = fullImg;
-        currentAssetName = file.name;
     };
     container.appendChild(btnImg);
   });
 }
 
-/* --- CAPTURE & GALLERY --- */
+function toggleTryAll() {
+    if (!currentType) { alert("Select category!"); return; }
+    if (autoTryRunning) stopAutoTry(); else startAutoTry();
+}
+function startAutoTry() {
+    autoTryRunning = true; autoSnapshots = []; autoTryIndex = 0;
+    document.getElementById('tryall-btn').textContent = "STOP";
+    runAutoStep();
+}
+function stopAutoTry() {
+    autoTryRunning = false; clearTimeout(autoTryTimeout);
+    document.getElementById('tryall-btn').textContent = "Try All";
+    if (autoSnapshots.length > 0) showGallery();
+}
+
+async function runAutoStep() {
+    if (!autoTryRunning) return;
+    const assets = PRELOADED_IMAGES[currentType];
+    if (!assets || autoTryIndex >= assets.length) { stopAutoTry(); return; }
+    const targetImg = assets[autoTryIndex];
+    if (currentType === 'earrings') earringImg = targetImg; else if (currentType === 'chains') necklaceImg = targetImg;
+    else if (currentType === 'rings') ringImg = targetImg; else if (currentType === 'bangles') bangleImg = targetImg;
+    
+    autoTryTimeout = setTimeout(() => { triggerFlash(); captureToGallery(); autoTryIndex++; runAutoStep(); }, 1500); 
+}
+
+/* --- CAPTURE & GALLERY WITH PREMIUM DESCRIPTION --- */
 function captureToGallery() {
   const tempCanvas = document.createElement('canvas'); 
   tempCanvas.width = videoElement.videoWidth; 
   tempCanvas.height = videoElement.videoHeight;
   const tempCtx = tempCanvas.getContext('2d');
   
+  // 1. Draw Camera Feed (Mirrored or Normal)
   if (currentCameraMode === 'environment') {
       tempCtx.translate(0, 0); tempCtx.scale(1, 1); 
   } else {
@@ -386,44 +437,75 @@ function captureToGallery() {
   }
 
   tempCtx.drawImage(videoElement, 0, 0);
-  tempCtx.setTransform(1, 0, 0, 1, 0, 0); 
+  tempCtx.setTransform(1, 0, 0, 1, 0, 0); // Reset for overlays
   try { tempCtx.drawImage(canvasElement, 0, 0); } catch(e) {}
   
-  // Overlay Code
+  // 2. DEFINE THE TEXT
   const productTitle = "Product Code: '25252'";
-  const productDesc = "This exquisite gold earring features a unique triangular drop design...";
-  const padding = tempCanvas.width * 0.04; 
-  const titleSize = tempCanvas.width * 0.045; 
-  const descSize = tempCanvas.width * 0.025; 
+  const productDesc = "This exquisite gold earring features a unique triangular drop design adorned with intricate filigree work and stylized peacock motifs. It highlights a central teardrop red stone (kemp or ruby) and is finished with a festive fringe of hanging gold balls and deep red beads. A perfect blend of classic temple artistry and elegance.";
+
+  // 3. SETTINGS & METRICS
+  const padding = tempCanvas.width * 0.04; // 4% padding
+  const titleSize = tempCanvas.width * 0.045; // Title Size
+  const descSize = tempCanvas.width * 0.025; // Desc Size
   const lineHeight = descSize * 1.4;
   
+  // Calculate Wrapped Description Lines
   tempCtx.font = `${descSize}px Montserrat, sans-serif`;
   const maxWidth = tempCanvas.width - (padding * 2);
   const words = productDesc.split(' ');
-  let lines = []; let currentLine = words[0];
+  let lines = [];
+  let currentLine = words[0];
+
   for (let i = 1; i < words.length; i++) {
       const width = tempCtx.measureText(currentLine + " " + words[i]).width;
-      if (width < maxWidth) currentLine += " " + words[i];
-      else { lines.push(currentLine); currentLine = words[i]; }
+      if (width < maxWidth) {
+          currentLine += " " + words[i];
+      } else {
+          lines.push(currentLine);
+          currentLine = words[i];
+      }
   }
   lines.push(currentLine);
 
+  // 4. CALCULATE BOX HEIGHT
+  // Title Height + Spacer + (Lines * LineHeight) + Bottom Padding
   const contentHeight = (titleSize * 1.5) + (titleSize * 0.5) + (lines.length * lineHeight) + padding;
+  
+  // 5. DRAW GRADIENT BACKGROUND
   const gradient = tempCtx.createLinearGradient(0, tempCanvas.height - contentHeight - padding, 0, tempCanvas.height);
-  gradient.addColorStop(0, "rgba(0,0,0,0)"); gradient.addColorStop(0.2, "rgba(0,0,0,0.8)"); gradient.addColorStop(1, "rgba(0,0,0,0.95)");
-  tempCtx.fillStyle = gradient; tempCtx.fillRect(0, tempCanvas.height - contentHeight - padding, tempCanvas.width, contentHeight + padding);
+  gradient.addColorStop(0, "rgba(0,0,0,0)");      // Transparent top
+  gradient.addColorStop(0.2, "rgba(0,0,0,0.8)");  // Dark start
+  gradient.addColorStop(1, "rgba(0,0,0,0.95)");   // Solid bottom
+  
+  tempCtx.fillStyle = gradient;
+  tempCtx.fillRect(0, tempCanvas.height - contentHeight - padding, tempCanvas.width, contentHeight + padding);
 
-  tempCtx.font = `bold ${titleSize}px Playfair Display, serif`; tempCtx.fillStyle = "#d4af37"; tempCtx.textAlign = "left"; tempCtx.textBaseline = "top";
-  const titleY = tempCanvas.height - contentHeight; tempCtx.fillText(productTitle, padding, titleY);
+  // 6. DRAW TITLE (GOLD)
+  tempCtx.font = `bold ${titleSize}px Playfair Display, serif`;
+  tempCtx.fillStyle = "#d4af37"; // Gold Color
+  tempCtx.textAlign = "left";
+  tempCtx.textBaseline = "top";
+  const titleY = tempCanvas.height - contentHeight;
+  tempCtx.fillText(productTitle, padding, titleY);
 
-  tempCtx.font = `${descSize}px Montserrat, sans-serif`; tempCtx.fillStyle = "#ffffff";
-  lines.forEach((line, index) => { tempCtx.fillText(line, padding, titleY + (titleSize * 1.5) + (index * lineHeight)); });
+  // 7. DRAW DESCRIPTION (WHITE)
+  tempCtx.font = `${descSize}px Montserrat, sans-serif`;
+  tempCtx.fillStyle = "#ffffff"; // White Color
+  const descStartY = titleY + (titleSize * 1.5); // Start below title
+  
+  lines.forEach((line, index) => {
+      tempCtx.fillText(line, padding, descStartY + (index * lineHeight));
+  });
 
+  // 8. DRAW WATERMARK (Top Right)
   if (watermarkImg.complete) {
-      const wWidth = tempCanvas.width * 0.25; const wHeight = (watermarkImg.height / watermarkImg.width) * wWidth;
+      const wWidth = tempCanvas.width * 0.25; 
+      const wHeight = (watermarkImg.height / watermarkImg.width) * wWidth;
       tempCtx.drawImage(watermarkImg, tempCanvas.width - wWidth - padding, padding, wWidth, wHeight);
   }
   
+  // Save & Return
   const dataUrl = tempCanvas.toDataURL('image/png');
   const safeName = "Product_25252_Look";
   autoSnapshots.push({ url: dataUrl, name: `${safeName}_${Date.now()}.png` });
@@ -435,20 +517,46 @@ function takeSnapshot() {
     document.getElementById('preview-image').src = shotData.url; document.getElementById('preview-modal').style.display = 'flex'; 
 }
 
-/* --- EXPORTS & MAPPING --- */
-// 1. Remap the Download Button to open Modal instead of WhatsApp
-window.downloadSingleSnapshot = requestDownload; 
+/* --- LIGHTBOX & GALLERY UI --- */
+function changeLightboxImage(direction) {
+    if (autoSnapshots.length === 0) return;
+    currentLightboxIndex = (currentLightboxIndex + direction + autoSnapshots.length) % autoSnapshots.length;
+    document.getElementById('lightbox-image').src = autoSnapshots[currentLightboxIndex].url;
+}
 
-// 2. Remap the "Confirm" button (if your HTML has onclick="confirmWhatsAppDownload()")
-window.confirmWhatsAppDownload = confirmDownload; 
+function showGallery() {
+  const grid = document.getElementById('gallery-grid'); grid.innerHTML = '';
+  if (autoSnapshots.length === 0) {
+      grid.innerHTML = '<p style="color:#666; width:100%; text-align:center;">No photos yet.</p>';
+  } else {
+      autoSnapshots.forEach((item, index) => {
+        const card = document.createElement('div'); card.className = "gallery-card";
+        const img = document.createElement('img'); img.src = item.url; img.className = "gallery-img";
+        const overlay = document.createElement('div'); overlay.className = "gallery-overlay";
+        let cleanName = item.name.replace("Jewels-Ai_", "").replace(".png", "").replace(/_\d+$/, "");
+        if(cleanName.length > 15) cleanName = cleanName.substring(0,12) + "...";
+        overlay.innerHTML = `<span class="overlay-text">${cleanName}</span><div class="overlay-icon">👁️</div>`;
+        card.onclick = () => { 
+            currentLightboxIndex = index;
+            document.getElementById('lightbox-image').src = item.url; 
+            document.getElementById('lightbox-overlay').style.display = 'flex'; 
+        };
+        card.appendChild(img); card.appendChild(overlay); grid.appendChild(card);
+      });
+  }
+  document.getElementById('gallery-modal').style.display = 'flex';
+}
 
-// 3. Close modal
-window.closeWhatsAppModal = closeWhatsAppModal;
+function closePreview() { document.getElementById('preview-modal').style.display = 'none'; }
+function closeGallery() { document.getElementById('gallery-modal').style.display = 'none'; }
+function closeLightbox() { document.getElementById('lightbox-overlay').style.display = 'none'; }
 
-// Standard Exports
-window.selectJewelryType = selectJewelryType; 
-window.takeSnapshot = takeSnapshot;
-window.closePreview = () => { document.getElementById('preview-modal').style.display = 'none'; };
+/* --- EXPORTS --- */
+window.selectJewelryType = selectJewelryType; window.toggleTryAll = toggleTryAll;
+window.closeGallery = closeGallery; window.closeLightbox = closeLightbox; window.takeSnapshot = takeSnapshot;
+window.downloadAllAsZip = downloadAllAsZip; window.closePreview = closePreview;
+window.downloadSingleSnapshot = downloadSingleSnapshot; window.shareSingleSnapshot = shareSingleSnapshot;
+window.changeLightboxImage = changeLightboxImage; window.toggleVoiceControl = toggleVoiceControl;
 
 async function startCameraFast(mode = 'user') {
     if (videoElement.srcObject && currentCameraMode === mode && videoElement.readyState >= 2) return;
@@ -463,7 +571,10 @@ async function startCameraFast(mode = 'user') {
             video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: mode } 
         });
         videoElement.srcObject = stream;
-        videoElement.onloadeddata = () => { videoElement.play(); loadingStatus.style.display = 'none'; detectLoop(); };
+        videoElement.onloadeddata = () => { 
+            videoElement.play(); loadingStatus.style.display = 'none'; 
+            detectLoop(); if(!recognition) initVoiceControl(); 
+        };
     } catch (err) { alert("Camera Error: " + err.message); loadingStatus.textContent = "Camera Error"; }
 }
 
