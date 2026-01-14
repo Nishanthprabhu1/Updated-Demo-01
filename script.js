@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: Final Gold Master */
+/* script.js - Jewels-Ai Atelier: Fixed Voice Recognition */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -21,6 +21,7 @@ const canvasElement = document.getElementById('overlay');
 const canvasCtx = canvasElement.getContext('2d');
 const loadingStatus = document.getElementById('loading-status');
 const flashOverlay = document.getElementById('flash-overlay'); 
+const voiceBtn = document.getElementById('voice-btn'); // Mic Button
 
 /* App State */
 let earringImg = null, necklaceImg = null, ringImg = null, bangleImg = null;
@@ -42,6 +43,7 @@ let currentLightboxIndex = 0;
 /* Voice State */
 let recognition = null;
 let voiceEnabled = true;
+let isRecognizing = false;
 
 /* Physics State */
 let physics = { earringVelocity: 0, earringAngle: 0 };
@@ -75,48 +77,133 @@ function triggerFlash() {
     setTimeout(() => { flashOverlay.classList.remove('flash-active'); }, 300);
 }
 
-/* --- 2. VOICE RECOGNITION AI --- */
+/* --- 2. ROBUST VOICE RECOGNITION AI --- */
 function initVoiceControl() {
+    // Check browser support
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-        recognition = new SpeechRecognition(); 
-        recognition.continuous = true; 
-        recognition.interimResults = false;
-        recognition.lang = 'en-US';
-        recognition.onresult = (event) => {
-            const command = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
-            processVoiceCommand(command);
-        };
-        recognition.onend = () => {
-            if (voiceEnabled) { setTimeout(() => { try { recognition.start(); } catch(e) { } }, 1000); }
-        };
-        try { recognition.start(); } catch(e) { console.log("Voice start error", e); }
-    } else {
-        const btn = document.getElementById('voice-btn');
-        if(btn) btn.style.display = 'none';
+    
+    if (!SpeechRecognition) {
+        console.warn("Voice Recognition not supported in this browser.");
+        if(voiceBtn) voiceBtn.style.display = 'none';
+        return;
     }
+
+    recognition = new SpeechRecognition(); 
+    recognition.continuous = true; // Keep listening
+    recognition.interimResults = false; // Only final results
+    recognition.lang = 'en-US';
+
+    // 1. On Start: Update UI
+    recognition.onstart = () => {
+        isRecognizing = true;
+        console.log("Voice Engine: Active");
+        if(voiceBtn) {
+            voiceBtn.style.backgroundColor = "rgba(0, 255, 0, 0.2)"; // Green tint
+            voiceBtn.style.borderColor = "#00ff00";
+        }
+    };
+
+    // 2. On Result: Process Command
+    recognition.onresult = (event) => {
+        const lastResult = event.results[event.results.length - 1];
+        if (lastResult.isFinal) {
+            const command = lastResult[0].transcript.trim().toLowerCase();
+            console.log("Heard command:", command); // Debug log
+            processVoiceCommand(command);
+        }
+    };
+
+    // 3. On Error: Log it
+    recognition.onerror = (event) => {
+        console.warn("Voice Error:", event.error);
+        if (event.error === 'not-allowed') {
+            alert("Microphone access blocked. Please allow permissions.");
+            voiceEnabled = false;
+        }
+    };
+
+    // 4. On End: Auto-Restart if enabled
+    recognition.onend = () => {
+        isRecognizing = false;
+        if (voiceEnabled) {
+            console.log("Voice Engine: Restarting...");
+            // Small delay to prevent crashing browser loops
+            setTimeout(() => { 
+                try { recognition.start(); } catch(e) {} 
+            }, 500); 
+        } else {
+            if(voiceBtn) {
+                voiceBtn.style.backgroundColor = "rgba(0,0,0,0.5)";
+                voiceBtn.style.borderColor = "white";
+            }
+        }
+    };
+
+    // Try to start immediately (might be blocked by browser until user interacts)
+    try { recognition.start(); } catch(e) { console.log("Auto-start blocked, waiting for click."); }
 }
 
 function toggleVoiceControl() {
-    const btn = document.getElementById('voice-btn');
-    if(!recognition) return;
+    if (!recognition) {
+        initVoiceControl();
+        return;
+    }
+
     if (voiceEnabled) {
-        voiceEnabled = false; recognition.stop();
-        btn.innerHTML = '🎙️'; btn.classList.add('voice-off');
+        // Turn OFF
+        voiceEnabled = false; 
+        recognition.stop();
+        if(voiceBtn) {
+            voiceBtn.innerHTML = '🔇'; 
+            voiceBtn.classList.add('voice-off');
+        }
     } else {
-        voiceEnabled = true; try { recognition.start(); } catch(e) {}
-        btn.innerHTML = '🎙️'; btn.classList.remove('voice-off');
+        // Turn ON
+        voiceEnabled = true; 
+        try { recognition.start(); } catch(e) {}
+        if(voiceBtn) {
+            voiceBtn.innerHTML = '🎙️'; 
+            voiceBtn.classList.remove('voice-off');
+        }
     }
 }
 
 function processVoiceCommand(cmd) {
-    if (cmd.includes('next') || cmd.includes('change')) navigateJewelry(1);
-    else if (cmd.includes('back') || cmd.includes('previous')) navigateJewelry(-1);
-    else if (cmd.includes('photo') || cmd.includes('capture')) takeSnapshot();
-    else if (cmd.includes('earring')) selectJewelryType('earrings');
-    else if (cmd.includes('chain')) selectJewelryType('chains');
-    else if (cmd.includes('ring')) selectJewelryType('rings');
-    else if (cmd.includes('bangle')) selectJewelryType('bangles');
+    // Clean string just in case
+    cmd = cmd.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
+    
+    // NAVIGATION
+    if (cmd.includes('next') || cmd.includes('change') || cmd.includes('forward')) {
+        navigateJewelry(1);
+        triggerVisualFeedback("Next Design");
+    }
+    else if (cmd.includes('back') || cmd.includes('previous') || cmd.includes('return')) {
+        navigateJewelry(-1);
+        triggerVisualFeedback("Previous Design");
+    }
+    
+    // CAPTURE
+    else if (cmd.includes('photo') || cmd.includes('capture') || cmd.includes('click') || cmd.includes('snap')) {
+        takeSnapshot();
+    }
+    
+    // CATEGORIES
+    else if (cmd.includes('earring') || cmd.includes('ear')) selectJewelryType('earrings');
+    else if (cmd.includes('chain') || cmd.includes('neck') || cmd.includes('necklace')) selectJewelryType('chains');
+    else if (cmd.includes('ring') || cmd.includes('finger')) selectJewelryType('rings');
+    else if (cmd.includes('bangle') || cmd.includes('wrist') || cmd.includes('bracelet')) selectJewelryType('bangles');
+}
+
+// Visual Helper to show user their command worked
+function triggerVisualFeedback(text) {
+    const feedback = document.createElement('div');
+    feedback.innerText = text;
+    feedback.style.position = 'fixed'; feedback.style.top = '20%'; feedback.style.left = '50%';
+    feedback.style.transform = 'translate(-50%, -50%)'; feedback.style.background = 'rgba(0,0,0,0.7)';
+    feedback.style.color = '#fff'; feedback.style.padding = '10px 20px'; feedback.style.borderRadius = '20px';
+    feedback.style.zIndex = '1000'; feedback.style.pointerEvents = 'none';
+    document.body.appendChild(feedback);
+    setTimeout(() => { feedback.remove(); }, 1000);
 }
 
 /* --- 3. GOOGLE DRIVE FETCHING --- */
