@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: Instant Download (No WhatsApp/Sheets) */
+/* script.js - Jewels-Ai Atelier: Instant Download + Success Feedback */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -166,15 +166,35 @@ async function preloadCategory(type) {
     loadingStatus.style.display = 'none';
 }
 
-/* --- 4. INSTANT DOWNLOAD (NO WHATSAPP/SHEETS) --- */
+/* --- 4. INSTANT DOWNLOAD WITH FEEDBACK --- */
 
 function downloadSingleSnapshot() {
     if(!currentPreviewData.url) {
         alert("No image to download.");
         return;
     }
-    // Directly save the file to device
+
+    // 1. Show Processing Overlay
+    const overlay = document.getElementById('process-overlay');
+    const statusText = document.getElementById('process-text');
+    
+    if (overlay && statusText) {
+        overlay.style.display = 'flex';
+        statusText.innerText = "Downloading...";
+    }
+
+    // 2. Trigger Download
     saveAs(currentPreviewData.url, currentPreviewData.name);
+
+    // 3. Update Text to "Completed" then Hide
+    setTimeout(() => {
+        if (statusText) statusText.innerText = "Download Completed!";
+        
+        // Hide after 1.5 seconds so user sees the success message
+        setTimeout(() => {
+            if (overlay) overlay.style.display = 'none';
+        }, 1500);
+    }, 1500);
 }
 
 function downloadAllAsZip() {
@@ -182,6 +202,10 @@ function downloadAllAsZip() {
         alert("No images to download!");
         return;
     }
+
+    const overlay = document.getElementById('process-overlay');
+    const statusText = document.getElementById('process-text');
+    if(overlay) { overlay.style.display = 'flex'; statusText.innerText = "Zipping Files..."; }
     
     const zip = new JSZip(); 
     const folder = zip.folder("Jewels-Ai_Collection");
@@ -191,7 +215,11 @@ function downloadAllAsZip() {
     });
 
     zip.generateAsync({type:"blob"})
-       .then(content => saveAs(content, "Jewels-Ai_Collection.zip"));
+       .then(content => {
+           saveAs(content, "Jewels-Ai_Collection.zip");
+           if(statusText) statusText.innerText = "Download Completed!";
+           setTimeout(() => { if(overlay) overlay.style.display = 'none'; }, 1500);
+       });
 }
 
 async function shareSingleSnapshot() {
