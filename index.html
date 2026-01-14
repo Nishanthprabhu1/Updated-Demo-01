@@ -13,6 +13,53 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+  <style>
+    /* Toast Notification Style for "Action Disabled" */
+    #toast-notification {
+      visibility: hidden;
+      min-width: 250px;
+      background-color: #333;
+      color: #d4af37; /* Gold color */
+      text-align: center;
+      border-radius: 4px;
+      padding: 16px;
+      position: fixed;
+      z-index: 9999;
+      left: 50%;
+      bottom: 30px;
+      transform: translateX(-50%);
+      font-size: 17px;
+      font-family: 'Montserrat', sans-serif;
+      border: 1px solid #d4af37;
+    }
+
+    #toast-notification.show {
+      visibility: visible;
+      -webkit-animation: fadein 0.5s, fadeout 0.5s 2.5s;
+      animation: fadein 0.5s, fadeout 0.5s 2.5s;
+    }
+
+    @-webkit-keyframes fadein {
+      from {bottom: 0; opacity: 0;} 
+      to {bottom: 30px; opacity: 1;}
+    }
+
+    @keyframes fadein {
+      from {bottom: 0; opacity: 0;}
+      to {bottom: 30px; opacity: 1;}
+    }
+
+    @-webkit-keyframes fadeout {
+      from {bottom: 30px; opacity: 1;} 
+      to {bottom: 0; opacity: 0;}
+    }
+
+    @keyframes fadeout {
+      from {bottom: 30px; opacity: 1;}
+      to {bottom: 0; opacity: 0;}
+    }
+  </style>
 </head>
 <body>
   <div id="app">
@@ -108,8 +155,39 @@
         </div>
     </div>
 
+    <div id="toast-notification">Action Disabled</div>
+
   </div>
 
   <script src="script.js"></script>
+
+  <script>
+    // Helper function to show the toast
+    function showToast(message) {
+      var x = document.getElementById("toast-notification");
+      x.innerText = message;
+      x.className = "show";
+      setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000);
+    }
+
+    // Disable Right Click
+    document.addEventListener('contextmenu', event => event.preventDefault());
+
+    // Block common DevTools shortcuts
+    document.addEventListener('keydown', function(e) {
+      // Check for Ctrl or Cmd key
+      const meta = e.ctrlKey || e.metaKey; 
+      
+      // Block F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, Ctrl+U
+      if (
+        e.key === "F12" ||
+        (meta && e.shiftKey && (e.key === "I" || e.key === "J" || e.key === "C")) ||
+        (meta && e.key === "u") // view-source
+      ) {
+        e.preventDefault();
+        showToast("Action Disabled");
+      }
+    });
+  </script>
 </body>
 </html>
