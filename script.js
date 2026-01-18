@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: v2.2 (Fixing AR Visibility) */
+/* script.js - Jewels-Ai Atelier: v2.3 (Instant Appear & Progressive Loading) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -134,7 +134,7 @@ function triggerVisualFeedback(text) {
     setTimeout(() => { feedback.remove(); }, 1000);
 }
 
-/* --- 3. BACKGROUND FETCHING & ROBUST LINKS --- */
+/* --- 3. BACKGROUND FETCHING --- */
 function initBackgroundFetch() {
     Object.keys(DRIVE_FOLDERS).forEach(key => { fetchCategoryData(key); });
 }
@@ -154,7 +154,6 @@ function fetchCategoryData(category) {
             if (data.error) throw new Error(data.error.message);
 
             JEWELRY_ASSETS[category] = data.files.map(file => {
-                // ROBUST LINK GENERATION: Fallback if thumbnailLink is missing
                 const baseLink = file.thumbnailLink;
                 let thumbSrc, fullSrc;
                 
@@ -162,7 +161,6 @@ function fetchCategoryData(category) {
                     thumbSrc = baseLink.replace(/=s\d+$/, "=s400");
                     fullSrc = baseLink.replace(/=s\d+$/, "=s3000");
                 } else {
-                    // Fallback for weird Drive permissions
                     thumbSrc = `https://drive.google.com/thumbnail?id=${file.id}`;
                     fullSrc = `https://drive.google.com/uc?export=view&id=${file.id}`;
                 }
@@ -181,21 +179,30 @@ function fetchCategoryData(category) {
     return fetchPromise;
 }
 
-/* --- 4. ASSET LOADING ON DEMAND --- */
-function loadHighResAsset(assetObj) {
+/* --- 4. PREDICTIVE LOADING ENGINE --- */
+function loadAsset(src, id) {
     return new Promise((resolve) => {
-        if (!assetObj) { resolve(null); return; }
-        if (IMAGE_CACHE[assetObj.id]) { resolve(IMAGE_CACHE[assetObj.id]); return; }
+        if (!src) { resolve(null); return; }
+        if (IMAGE_CACHE[id]) { resolve(IMAGE_CACHE[id]); return; }
         
         const img = new Image(); 
         img.crossOrigin = 'anonymous';
-        img.onload = () => { IMAGE_CACHE[assetObj.id] = img; resolve(img); };
-        img.onerror = () => { 
-            console.warn("Failed to load image:", assetObj.name); 
-            resolve(null); 
-        };
-        img.src = assetObj.fullSrc;
+        img.referrerPolicy = "no-referrer"; // Helps with Drive links
+        img.onload = () => { IMAGE_CACHE[id] = img; resolve(img); };
+        img.onerror = () => { resolve(null); };
+        img.src = src;
     });
+}
+
+function preloadNextImages(assets, currentIndex) {
+    // Silently load the next 3 images in the background
+    for (let i = 1; i <= 3; i++) {
+        const nextIdx = (currentIndex + i) % assets.length;
+        const nextAsset = assets[nextIdx];
+        if (!IMAGE_CACHE[nextAsset.id]) {
+            loadAsset(nextAsset.fullSrc, nextAsset.id);
+        }
+    }
 }
 
 function setActiveARImage(img) {
@@ -213,7 +220,7 @@ window.onload = async () => {
     await selectJewelryType('earrings');
 };
 
-/* --- 6. INSTANT SELECTION LOGIC --- */
+/* --- 6. INSTANT SELECTION & DISPLAY --- */
 async function selectJewelryType(type) {
   if (currentType === type) return;
   currentType = type;
@@ -229,7 +236,7 @@ async function selectJewelryType(type) {
   let assets = JEWELRY_ASSETS[type];
   if (!assets) {
       loadingStatus.style.display = 'block';
-      loadingStatus.textContent = "Loading Collection...";
+      loadingStatus.textContent = "Loading...";
       assets = await fetchCategoryData(type);
       loadingStatus.style.display = 'none';
   }
@@ -249,24 +256,44 @@ async function selectJewelryType(type) {
     btnImg.className = "thumb-btn"; 
     btnImg.loading = "lazy"; 
     
-    btnImg.onclick = async () => {
-        currentAssetIndex = i;
-        currentAssetName = asset.name;
-        highlightButtonByIndex(i);
-        const highResImg = await loadHighResAsset(asset);
-        setActiveARImage(highResImg);
+    btnImg.onclick = () => {
+        applyAssetInstantly(asset, i);
     };
     fragment.appendChild(btnImg);
   });
   
   container.appendChild(fragment);
 
-  currentAssetIndex = 0;
-  highlightButtonByIndex(0);
-  currentAssetName = assets[0].name;
-  
-  const firstHighRes = await loadHighResAsset(assets[0]);
-  setActiveARImage(firstHighRes);
+  // Auto-Select First Item
+  applyAssetInstantly(assets[0], 0);
+}
+
+// THE SPEED FIX: Show Thumbnail First, Then High Res
+async function applyAssetInstantly(asset, index) {
+    currentAssetIndex = index;
+    currentAssetName = asset.name;
+    highlightButtonByIndex(index);
+
+    // 1. INSTANT: Set Thumbnail as AR Image (Blurry but visible)
+    // We create a temp image from the thumbnail source which is usually cached
+    const thumbImg = new Image();
+    thumbImg.src = asset.thumbSrc;
+    thumbImg.crossOrigin = 'anonymous';
+    
+    // Set it immediately
+    setActiveARImage(thumbImg);
+
+    // 2. BACKGROUND: Fetch High Res
+    const highResImg = await loadAsset(asset.fullSrc, asset.id);
+    
+    // 3. SWAP: If this is still the selected asset, update to High Res
+    if (currentAssetName === asset.name && highResImg) {
+        setActiveARImage(highResImg);
+    }
+    
+    // 4. FUTURE: Preload neighbors
+    const assets = JEWELRY_ASSETS[currentType];
+    if(assets) preloadNextImages(assets, index);
 }
 
 function highlightButtonByIndex(index) {
@@ -284,19 +311,12 @@ function highlightButtonByIndex(index) {
     }
 }
 
-async function navigateJewelry(dir) {
+function navigateJewelry(dir) {
   if (!currentType || !JEWELRY_ASSETS[currentType]) return;
   const list = JEWELRY_ASSETS[currentType];
   
   let nextIdx = (currentAssetIndex + dir + list.length) % list.length;
-  currentAssetIndex = nextIdx;
-  
-  const asset = list[nextIdx];
-  currentAssetName = asset.name;
-  highlightButtonByIndex(nextIdx);
-  
-  const highResImg = await loadHighResAsset(asset);
-  if(highResImg) setActiveARImage(highResImg);
+  applyAssetInstantly(list[nextIdx], nextIdx);
 }
 
 /* --- 7. AUTO TRY & CAPTURE --- */
@@ -321,9 +341,10 @@ async function runAutoStep() {
     if (!assets || autoTryIndex >= assets.length) { stopAutoTry(); return; }
     
     const asset = assets[autoTryIndex];
-    currentAssetName = asset.name;
-    const highResImg = await loadHighResAsset(asset);
+    // For auto-try, we wait for high-res to ensure good photo
+    const highResImg = await loadAsset(asset.fullSrc, asset.id);
     setActiveARImage(highResImg);
+    currentAssetName = asset.name;
 
     autoTryTimeout = setTimeout(() => { 
         triggerFlash(); captureToGallery(); 
@@ -442,7 +463,6 @@ async function startCameraFast(mode = 'user') {
 
 async function detectLoop() {
     if (videoElement.readyState >= 2) {
-        // Send to models regardless, but drawing is handled in callbacks with strict gating
         if (!isProcessingFace) { isProcessingFace = true; await faceMesh.send({image: videoElement}); isProcessingFace = false; }
         if (!isProcessingHand) { isProcessingHand = true; await hands.send({image: videoElement}); isProcessingHand = false; }
     }
