@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: v2.1 (Instant Switch & Scale Ready) */
+/* script.js - Jewels-Ai Atelier: v2.2 (Fixing AR Visibility) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -11,9 +11,9 @@ const DRIVE_FOLDERS = {
 };
 
 /* --- ASSETS & STATE --- */
-const JEWELRY_ASSETS = {}; // Stores the file lists (id, name, links)
-const CATALOG_PROMISES = {}; // Stores the "loading" status of each category
-const IMAGE_CACHE = {}; // Stores loaded high-res images
+const JEWELRY_ASSETS = {}; 
+const CATALOG_PROMISES = {}; 
+const IMAGE_CACHE = {}; 
 
 const watermarkImg = new Image(); watermarkImg.src = 'logo_watermark.png'; 
 
@@ -134,23 +134,17 @@ function triggerVisualFeedback(text) {
     setTimeout(() => { feedback.remove(); }, 1000);
 }
 
-/* --- 3. BACKGROUND FETCHING (THE SPEED FIX) --- */
+/* --- 3. BACKGROUND FETCHING & ROBUST LINKS --- */
 function initBackgroundFetch() {
-    // Immediately start fetching ALL categories in parallel
-    Object.keys(DRIVE_FOLDERS).forEach(key => {
-        fetchCategoryData(key);
-    });
+    Object.keys(DRIVE_FOLDERS).forEach(key => { fetchCategoryData(key); });
 }
 
 function fetchCategoryData(category) {
-    // If we are already fetching or have fetched, return the existing promise
     if (CATALOG_PROMISES[category]) return CATALOG_PROMISES[category];
 
-    // Create a new fetch promise
     const fetchPromise = new Promise(async (resolve, reject) => {
         try {
             const folderId = DRIVE_FOLDERS[category];
-            // Request up to 1000 files to handle the "50 products" requirement easily
             const query = `'${folderId}' in parents and trashed = false and mimeType contains 'image/'`;
             const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=1000&fields=files(id,name,thumbnailLink)&key=${API_KEY}`;
             
@@ -159,21 +153,27 @@ function fetchCategoryData(category) {
             
             if (data.error) throw new Error(data.error.message);
 
-            // Process data but don't download heavy images yet
             JEWELRY_ASSETS[category] = data.files.map(file => {
-                const baseLink = file.thumbnailLink || "";
-                return { 
-                    id: file.id, 
-                    name: file.name, 
-                    thumbSrc: baseLink.replace(/=s\d+$/, "=s400"),  // Small for menu
-                    fullSrc: baseLink.replace(/=s\d+$/, "=s3000")   // Huge for AR
-                };
+                // ROBUST LINK GENERATION: Fallback if thumbnailLink is missing
+                const baseLink = file.thumbnailLink;
+                let thumbSrc, fullSrc;
+                
+                if (baseLink) {
+                    thumbSrc = baseLink.replace(/=s\d+$/, "=s400");
+                    fullSrc = baseLink.replace(/=s\d+$/, "=s3000");
+                } else {
+                    // Fallback for weird Drive permissions
+                    thumbSrc = `https://drive.google.com/thumbnail?id=${file.id}`;
+                    fullSrc = `https://drive.google.com/uc?export=view&id=${file.id}`;
+                }
+
+                return { id: file.id, name: file.name, thumbSrc: thumbSrc, fullSrc: fullSrc };
             });
             console.log(`Loaded ${category}: ${JEWELRY_ASSETS[category].length} items`);
             resolve(JEWELRY_ASSETS[category]);
         } catch (err) {
             console.error(`Error loading ${category}:`, err);
-            resolve([]); // Resolve empty on error to prevent hanging
+            resolve([]); 
         }
     });
 
@@ -184,10 +184,16 @@ function fetchCategoryData(category) {
 /* --- 4. ASSET LOADING ON DEMAND --- */
 function loadHighResAsset(assetObj) {
     return new Promise((resolve) => {
+        if (!assetObj) { resolve(null); return; }
         if (IMAGE_CACHE[assetObj.id]) { resolve(IMAGE_CACHE[assetObj.id]); return; }
-        const img = new Image(); img.crossOrigin = 'anonymous';
+        
+        const img = new Image(); 
+        img.crossOrigin = 'anonymous';
         img.onload = () => { IMAGE_CACHE[assetObj.id] = img; resolve(img); };
-        img.onerror = () => { resolve(null); };
+        img.onerror = () => { 
+            console.warn("Failed to load image:", assetObj.name); 
+            resolve(null); 
+        };
         img.src = assetObj.fullSrc;
     });
 }
@@ -201,40 +207,27 @@ function setActiveARImage(img) {
 
 /* --- 5. INITIALIZATION --- */
 window.onload = async () => {
-    // 1. Start fetching everything immediately
     initBackgroundFetch();
-
-    // 2. Start Camera
     await startCameraFast('user');
-    
-    // 3. Select default category (Wait for it to be ready)
     setTimeout(() => { loadingStatus.style.display = 'none'; }, 2000);
     await selectJewelryType('earrings');
 };
 
 /* --- 6. INSTANT SELECTION LOGIC --- */
 async function selectJewelryType(type) {
-  // If clicking the same category, do nothing
   if (currentType === type) return;
-
   currentType = type;
   
-  // 1. Intelligent Camera Switching (Prevents lag if mode is same)
   const targetMode = (type === 'rings' || type === 'bangles') ? 'environment' : 'user';
-  // We don't await this if it's the same mode, it returns instantly
   startCameraFast(targetMode); 
 
-  // 2. Clear current AR assets
   earringImg = null; necklaceImg = null; ringImg = null; bangleImg = null;
 
-  // 3. UI: Show "Loading" if data isn't ready (rare, only on slow connection)
   const container = document.getElementById('jewelry-options'); 
   container.innerHTML = ''; 
   
-  // 4. Wait for the background fetch to finish (it's likely already done)
   let assets = JEWELRY_ASSETS[type];
   if (!assets) {
-      // If not ready, wait for the promise we started at window.onload
       loadingStatus.style.display = 'block';
       loadingStatus.textContent = "Loading Collection...";
       assets = await fetchCategoryData(type);
@@ -247,9 +240,6 @@ async function selectJewelryType(type) {
   }
 
   container.style.display = 'flex';
-
-  // 5. Render Buttons (Instant DOM creation)
-  // We use a DocumentFragment for performance with 50+ items
   const fragment = document.createDocumentFragment();
   
   assets.forEach((asset, i) => {
@@ -257,7 +247,6 @@ async function selectJewelryType(type) {
     btnImg.src = asset.thumbSrc; 
     btnImg.crossOrigin = 'anonymous'; 
     btnImg.className = "thumb-btn"; 
-    // Lazy load thumbnails that are off-screen to save bandwidth
     btnImg.loading = "lazy"; 
     
     btnImg.onclick = async () => {
@@ -272,19 +261,16 @@ async function selectJewelryType(type) {
   
   container.appendChild(fragment);
 
-  // 6. Select First Item
   currentAssetIndex = 0;
   highlightButtonByIndex(0);
   currentAssetName = assets[0].name;
   
-  // Load first item high-res
   const firstHighRes = await loadHighResAsset(assets[0]);
   setActiveARImage(firstHighRes);
 }
 
 function highlightButtonByIndex(index) {
     const container = document.getElementById('jewelry-options');
-    // Optimization: Don't loop all 50 items if possible, but for CSS styling we must reset
     const children = container.children;
     for (let i = 0; i < children.length; i++) {
         if (i === index) {
@@ -357,11 +343,9 @@ function captureToGallery() {
   tempCtx.setTransform(1, 0, 0, 1, 0, 0); 
   try { tempCtx.drawImage(canvasElement, 0, 0); } catch(e) {}
   
-  // Filename as description
   let cleanName = currentAssetName.replace(/\.(png|jpg|jpeg|webp)$/i, "").replace(/_/g, " ");
   cleanName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
 
-  // Styling
   const padding = tempCanvas.width * 0.04; 
   const titleSize = tempCanvas.width * 0.045; 
   const descSize = tempCanvas.width * 0.035; 
@@ -397,7 +381,6 @@ function takeSnapshot() {
     document.getElementById('preview-image').src = shotData.url; document.getElementById('preview-modal').style.display = 'flex'; 
 }
 
-/* --- GALLERY HELPERS --- */
 function downloadSingleSnapshot() {
     if(!currentPreviewData.url) return;
     saveAs(currentPreviewData.url, currentPreviewData.name);
@@ -441,10 +424,6 @@ function closeLightbox() { document.getElementById('lightbox-overlay').style.dis
 async function startCameraFast(mode = 'user') {
     if (videoElement.srcObject && currentCameraMode === mode && videoElement.readyState >= 2) return;
     
-    // Optimization: Don't show full loading screen if just switching lenses
-    // loadingStatus.style.display = 'block'; 
-    // loadingStatus.textContent = "Adjusting Camera...";
-    
     currentCameraMode = mode;
     if (videoElement.srcObject) { videoElement.srcObject.getTracks().forEach(track => track.stop()); }
     if (mode === 'environment') { videoElement.classList.add('no-mirror'); } else { videoElement.classList.remove('no-mirror'); }
@@ -456,7 +435,6 @@ async function startCameraFast(mode = 'user') {
         videoElement.srcObject = stream;
         videoElement.onloadeddata = () => { 
             videoElement.play(); 
-            // loadingStatus.style.display = 'none'; 
             detectLoop(); if(!recognition) initVoiceControl(); 
         };
     } catch (err) { alert("Camera Error: " + err.message); }
@@ -464,6 +442,7 @@ async function startCameraFast(mode = 'user') {
 
 async function detectLoop() {
     if (videoElement.readyState >= 2) {
+        // Send to models regardless, but drawing is handled in callbacks with strict gating
         if (!isProcessingFace) { isProcessingFace = true; await faceMesh.send({image: videoElement}); isProcessingFace = false; }
         if (!isProcessingHand) { isProcessingHand = true; await hands.send({image: videoElement}); isProcessingHand = false; }
     }
@@ -476,9 +455,19 @@ function calculateAngle(p1, p2) { return Math.atan2(p2.y - p1.y, p2.x - p1.x); }
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 
+// --- STRICT GATING: Only draw if Rings/Bangles are active ---
 hands.onResults((results) => {
-  const w = canvasElement.width; const h = canvasElement.height;
-  canvasCtx.save(); 
+  if (currentType !== 'rings' && currentType !== 'bangles') return;
+
+  const w = videoElement.videoWidth; 
+  const h = videoElement.videoHeight;
+  
+  canvasElement.width = w; 
+  canvasElement.height = h;
+
+  canvasCtx.save();
+  canvasCtx.clearRect(0, 0, w, h);
+
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
 
@@ -530,14 +519,25 @@ hands.onResults((results) => {
 
 const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
 faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
+// --- STRICT GATING: Only draw if Earrings/Chains are active ---
 faceMesh.onResults((results) => {
-  canvasElement.width = videoElement.videoWidth; canvasElement.height = videoElement.videoHeight;
-  canvasCtx.save(); canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  if (currentType !== 'earrings' && currentType !== 'chains') return;
+
+  const w = videoElement.videoWidth; 
+  const h = videoElement.videoHeight;
+
+  canvasElement.width = w; 
+  canvasElement.height = h;
+
+  canvasCtx.save(); 
+  canvasCtx.clearRect(0, 0, w, h);
+  
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
-  else { canvasCtx.translate(canvasElement.width, 0); canvasCtx.scale(-1, 1); }
+  else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
 
   if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
-    const lm = results.multiFaceLandmarks[0]; const w = canvasElement.width; const h = canvasElement.height;
+    const lm = results.multiFaceLandmarks[0]; 
     const leftEar = { x: lm[132].x * w, y: lm[132].y * h }; const rightEar = { x: lm[361].x * w, y: lm[361].y * h };
     const neck = { x: lm[152].x * w, y: lm[152].y * h }; const nose = { x: lm[1].x * w, y: lm[1].y * h };
 
